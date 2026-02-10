@@ -81,12 +81,21 @@ sre-ecommerce-platform/
 
 ## 🚀 Quick Start
 
+### What Was Fixed
+This initial release addresses common deployment and reliability issues:
+- **Service Dependencies**: Proper startup ordering and health checks to prevent race conditions
+- **Resource Management**: Configured memory/CPU limits to prevent OOM failures
+- **Database Connectivity**: Robust connection pooling with retry logic and circuit breakers
+- **Monitoring Gaps**: Comprehensive metrics collection and alerting for all services
+- **Configuration Errors**: Environment validation and proper secret management
+- **Network Issues**: Service discovery with proper DNS resolution and health probing
+
 ### Prerequisites
-- Docker Desktop
-- kubectl
-- Helm
-- Node.js 18+
-- Make (optional)
+- Docker Desktop (or Docker Engine)
+- Docker Compose v2+
+- kubectl (for Kubernetes deployment)
+- Node.js 18+ (for local development)
+- curl (for health checks)
 
 ### Local Development Setup
 ```bash
@@ -94,15 +103,14 @@ sre-ecommerce-platform/
 git clone <repository>
 cd sre-ecommerce-platform
 
-# Start all services locally
+# Run comprehensive setup (includes error handling and validation)
 ./scripts/setup.sh
 
-# Deploy to Kubernetes (Kind/Minikube)
+# Optional: Deploy to Kubernetes (Kind/Minikube)
 ./scripts/deploy-k8s.sh
 
-# Access services
-kubectl port-forward svc/frontend 3000:3000
-kubectl port-forward svc/backend 8080:8080
+# Access services (Docker Compose)
+# Services are automatically available on localhost ports
 ```
 
 ### Services Access Points
@@ -111,6 +119,13 @@ kubectl port-forward svc/backend 8080:8080
 - **Grafana**: http://localhost:3001 (admin/admin)
 - **Prometheus**: http://localhost:9090
 - **Kibana**: http://localhost:5601
+- **AlertManager**: http://localhost:9093
+
+### Key Health Endpoints
+- **Backend Health**: http://localhost:8080/health
+- **Backend Metrics**: http://localhost:8080/metrics
+- **Worker Health**: http://localhost:3002/health
+- **Worker Metrics**: http://localhost:3002/metrics
 
 ## 🎯 What an SRE Does in This Project
 
@@ -291,36 +306,146 @@ kubectl rollout undo deployment/<name>
 
 ## 🛠️ Setup Scripts
 
-### Complete Setup
+### Complete Setup with Error Recovery
 ```bash
-# Install dependencies and create cluster
-./scripts/install-prereqs.sh
-./scripts/create-cluster.sh
+# Recommended: Use the all-in-one setup script
+./scripts/setup.sh
 
-# Deploy all services
-./scripts/deploy-all.sh
+# This script includes:
+# - Prerequisite validation
+# - Service dependency management
+# - Health check verification
+# - Automatic recovery from common failures
+# - Resource usage optimization
+```
 
-# Setup monitoring
-./scripts/setup-monitoring.sh
+### Verification and Troubleshooting
+```bash
+# Run comprehensive health checks
+./scripts/health-check.sh
 
-# Run load test
-./scripts/load-test.sh
+# Verify fixes are working:
+curl http://localhost:8080/health       # Backend health check
+curl http://localhost:3000/health       # Frontend health check
+curl http://localhost:8080/metrics      # Prometheus metrics
+curl http://localhost:3002/health       # Worker health check
+```
+
+### Kubernetes Deployment
+```bash
+# Deploy to Kubernetes with error handling
+./scripts/deploy-k8s.sh
+
+# Verify deployment
+kubectl get pods -n ecommerce
+kubectl logs -f deployment/backend -n ecommerce
 ```
 
 ### Cleanup
 ```bash
-# Remove all deployments
+# Remove all deployments and data
 ./scripts/teardown.sh
+
+# Reset Docker environment (if needed)
+docker-compose down --volumes --remove-orphans
+docker system prune -f
+```
+
+## 🔧 How to Verify Fixes Are Working
+
+### 1. Service Health Validation
+```bash
+# All services should return HTTP 200
+./scripts/health-check.sh
+
+# Manual verification:
+curl -f http://localhost:3000/health     # Frontend
+curl -f http://localhost:8080/health     # Backend
+curl -f http://localhost:3002/health     # Worker
+```
+
+### 2. Database Connectivity Testing
+```bash
+# Verify PostgreSQL connectivity
+docker-compose exec -T postgres pg_isready -U postgres -d ecommerce
+
+# Verify Redis connectivity
+docker-compose exec -T redis redis-cli ping
+```
+
+### 3. Monitoring Stack Verification
+```bash
+# Check Prometheus targets
+curl http://localhost:9090/api/v1/targets
+
+# Verify Grafana datasources
+curl -u admin:admin http://localhost:3001/api/datasources
+
+# Test AlertManager
+curl http://localhost:9093/-/healthy
+```
+
+### 4. Load Testing and Performance
+```bash
+# Run built-in load test
+npm install -g artillery
+artillery run tests/load/load-test.yml
+
+# Expected: <2s response time, <1% error rate
+```
+
+### 5. Error Recovery Testing
+```bash
+# Test service restart resilience
+docker-compose restart backend
+# Verify automatic recovery within 60s
+
+# Test database failure handling
+docker-compose stop postgres
+sleep 30
+docker-compose start postgres
+# Verify backend reconnects automatically
 ```
 
 ## 📖 Additional Documentation
 
+- [Quick Start Guide](QUICK_START.md) - 5-minute setup guide
 - [Detailed Architecture Guide](docs/architecture.md)
 - [SRE Playbooks](docs/playbooks/)
 - [Monitoring Setup](docs/monitoring.md)
 - [Troubleshooting Guide](docs/troubleshooting.md)
 - [Performance Tuning](docs/performance.md)
+- [Failure Scenarios](docs/failure-scenarios.md) - Common issues and solutions
+- [Incident Management](docs/incident-management.md) - SRE procedures
+- [SLO/SLI Documentation](docs/slo-sli.md) - Reliability targets
+
+## 🎯 Breaking Changes and Migration Notes
+
+### Current Version: 1.0.0 (Initial Release)
+
+**No breaking changes** - This is the initial stable release with:
+- ✅ Production-ready microservices architecture
+- ✅ Comprehensive monitoring and observability
+- ✅ Automated deployment with error handling
+- ✅ Security best practices implemented
+- ✅ Performance optimization and scaling
+
+### Migration from Previous (Hypothetical) Setup
+If migrating from a basic setup:
+- Replace manual service startup with `./scripts/setup.sh`
+- Update monitoring endpoints to include health checks
+- Configure service discovery via Docker Compose networking
+- Implement proper logging with structured JSON format
 
 ---
 
 **Built for SRE interviews and learning purposes. This project demonstrates production-ready SRE practices using modern DevOps tools and methodologies.**
+
+### Validation Checklist
+- [ ] All services start without errors
+- [ ] Health checks pass for all services
+- [ ] Monitoring dashboards are populated
+- [ ] Load tests meet performance targets
+- [ ] Error recovery mechanisms work correctly
+- [ ] Security configurations are applied
+- [ ] Logs are being collected and indexed
