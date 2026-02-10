@@ -1,0 +1,54 @@
+config:
+  target: 'http://localhost:8080'
+  phases:
+    - duration: 60
+      arrivalRate: 10
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 50
+      name: "Load test"
+    - duration: 60
+      arrivalRate: 100
+      name: "Stress test"
+    - duration: 60
+      arrivalRate: 10
+      name: "Cool down"
+
+scenarios:
+  - name: "Health Check"
+    weight: 20
+    flow:
+      - get:
+          url: "/health"
+
+  - name: "Get Products"
+    weight: 40
+    flow:
+      - get:
+          url: "/api/products"
+
+  - name: "Get Single Product"
+    weight: 30
+    flow:
+      - get:
+          url: "/api/products/123e4567-e89b-12d3-a456-426614174000"
+
+  - name: "Create Order"
+    weight: 10
+    flow:
+      - post:
+          url: "/api/orders"
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Bearer test-token"
+          json:
+            user_id: "123e4567-e89b-12d3-a456-426614174000"
+            items:
+              - product_id: "123e4567-e89b-12d3-a456-426614174001"
+                quantity: 2
+
+  - name: "Get Metrics"
+    weight: 5
+    flow:
+      - get:
+          url: "/metrics"

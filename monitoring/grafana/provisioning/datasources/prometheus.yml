@@ -1,0 +1,23 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus-service:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      queryTimeout: "60s"
+      httpMethod: "POST"
+    secureJsonData: {}
+
+  - name: AlertManager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager-service:9093
+    editable: true
+    jsonData:
+      handleGrafanaAlerts: true
+    secureJsonData: {}

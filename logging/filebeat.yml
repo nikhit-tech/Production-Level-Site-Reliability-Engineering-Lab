@@ -1,0 +1,83 @@
+filebeat.inputs:
+- type: container
+  paths:
+    - '/var/lib/docker/containers/*/*.log'
+  processors:
+    - add_docker_metadata:
+        host: "unix:///var/run/docker.sock"
+    - decode_json_fields:
+        fields: ["message"]
+        target: ""
+        overwrite_keys: true
+  fields:
+    logtype: docker
+  fields_under_root: true
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/backend/*.log
+  fields:
+    service: backend
+    logtype: application
+  fields_under_root: true
+  multiline.pattern: '^\d{4}-\d{2}-\d{2}'
+  multiline.negate: true
+  multiline.match: after
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/worker/*.log
+  fields:
+    service: worker
+    logtype: application
+  fields_under_root: true
+  multiline.pattern: '^\d{4}-\d{2}-\d{2}'
+  multiline.negate: true
+  multiline.match: after
+
+# Add fields to all events
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+  - add_docker_metadata: ~
+
+# Output configuration
+output.elasticsearch:
+  hosts: ["${ELASTICSEARCH_HOST:elasticsearch:9200}"]
+  index: "ecommerce-logs-%{+yyyy.MM.dd}"
+  template.name: "ecommerce"
+  template.pattern: "ecommerce-*"
+  template.settings:
+    index.number_of_shards: 1
+    index.number_of_replicas: 0
+    index.refresh_interval: "5s"
+
+# Kibana configuration
+setup.kibana:
+  host: "${KIBANA_HOST:kibana:5601}"
+
+# Logging configuration
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# Queue configuration
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 1s
+
+# Monitoring
+monitoring.enabled: false
+
+# Custom fields
+fields:
+  environment: "${ENVIRONMENT:development}"
+  application: ecommerce

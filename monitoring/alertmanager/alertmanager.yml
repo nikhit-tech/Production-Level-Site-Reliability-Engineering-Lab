@@ -1,0 +1,156 @@
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@ecommerce.local'
+  smtp_auth_username: ''
+  smtp_auth_password: ''
+
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+  routes:
+  - match:
+      severity: critical
+    receiver: 'critical-alerts'
+    group_wait: 5s
+    repeat_interval: 30m
+    routes:
+    - match:
+        service: database
+      receiver: 'database-alerts'
+    - match:
+        service: backend
+      receiver: 'backend-alerts'
+    - match:
+        service: redis
+      receiver: 'redis-alerts'
+
+  - match:
+      severity: warning
+    receiver: 'warning-alerts'
+    group_wait: 30s
+    repeat_interval: 2h
+
+  - match:
+      alertname: Watchdog
+    receiver: 'null'
+
+inhibit_rules:
+- source_match:
+    severity: 'critical'
+  target_match:
+    severity: 'warning'
+  equal: ['alertname', 'cluster', 'service']
+
+receivers:
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://localhost:5001/'
+    send_resolved: true
+
+- name: 'critical-alerts'
+  email_configs:
+  - to: 'oncall@ecommerce.local'
+    subject: '[CRITICAL] {{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+  slack_configs:
+  - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    channel: '#alerts-critical'
+    title: '🚨 Critical Alert: {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      *Alert:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Service:* {{ .GroupLabels.service }}
+      *Severity:* {{ .Labels.severity }}
+      {{ end }}
+    send_resolved: true
+
+- name: 'warning-alerts'
+  email_configs:
+  - to: 'devops@ecommerce.local'
+    subject: '[WARNING] {{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+  slack_configs:
+  - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    channel: '#alerts-warning'
+    title: '⚠️ Warning Alert: {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      *Alert:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Service:* {{ .GroupLabels.service }}
+      *Severity:* {{ .Labels.severity }}
+      {{ end }}
+    send_resolved: true
+
+- name: 'database-alerts'
+  email_configs:
+  - to: 'dba@ecommerce.local'
+    subject: '[DATABASE] {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+  slack_configs:
+  - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    channel: '#database-alerts'
+    title: '🗄️ Database Alert: {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      *Alert:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Severity:* {{ .Labels.severity }}
+      {{ end }}
+    send_resolved: true
+
+- name: 'backend-alerts'
+  email_configs:
+  - to: 'backend-team@ecommerce.local'
+    subject: '[BACKEND] {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+  slack_configs:
+  - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    channel: '#backend-alerts'
+    title: '⚙️ Backend Alert: {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      *Alert:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Severity:* {{ .Labels.severity }}
+      {{ end }}
+    send_resolved: true
+
+- name: 'redis-alerts'
+  email_configs:
+  - to: 'cache-team@ecommerce.local'
+    subject: '[REDIS] {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+
+- name: 'null'
+  webhook_configs:
+  - url: 'http://localhost:5001/null'
