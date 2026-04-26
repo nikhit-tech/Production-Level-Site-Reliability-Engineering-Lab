@@ -12,6 +12,11 @@ spec:
   selector:
     matchLabels:
       app: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -22,11 +27,18 @@ spec:
         prometheus.io/port: "3002"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: worker-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
       containers:
       - name: worker
         image: ecommerce-worker:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3002
+          name: metrics
         env:
         - name: NODE_ENV
           value: "production"
@@ -67,6 +79,10 @@ spec:
           value: "true"
         - name: METRICS_PORT
           value: "3002"
+        - name: INVENTORY_ALERT_EMAIL
+          value: "inventory@ecommerce.local"
+        - name: REPORTS_EMAIL
+          value: "reports@ecommerce.local"
         resources:
           requests:
             memory: "256Mi"
@@ -74,27 +90,38 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "400m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          failureThreshold: 30
+          periodSeconds: 5
         readinessProbe:
           httpGet:
-            path: "/health"
+            path: /health
             port: 3002
-          initialDelaySeconds: 10
+          initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: "/health"
+            path: /health
             port: 3002
-          initialDelaySeconds: 30
+          initialDelaySeconds: 0
           periodSeconds: 30
           timeoutSeconds: 5
           failureThreshold: 3
         volumeMounts:
-        - name: logs
-          mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
       volumes:
-      - name: logs
+      - name: tmp
         emptyDir: {}
       imagePullSecrets: []
 ---
@@ -110,7 +137,7 @@ spec:
   - port: 3002
     targetPort: 3002
     protocol: TCP
-    name: http
+    name: metrics
   selector:
     app: worker
   type: ClusterIP
@@ -121,14 +148,19 @@ metadata:
   name: inventory-check
   namespace: ecommerce
 spec:
-  schedule: "0 2 * * *"  # Daily at 2 AM
+  schedule: "0 2 * * *"
   jobTemplate:
     spec:
       template:
         spec:
+          serviceAccountName: worker-sa
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
           containers:
           - name: inventory-check
             image: ecommerce-worker:latest
+            imagePullPolicy: IfNotPresent
             command: ["/bin/sh", "-c"]
             args:
             - |
@@ -142,14 +174,8 @@ spec:
                   port: 5432
                 });
                 pool.query('SELECT id, name, stock_quantity FROM products WHERE stock_quantity < 10 ORDER BY stock_quantity ASC')
-                  .then(result => {
-                    console.log('Low stock items:', result.rows);
-                    process.exit(0);
-                  })
-                  .catch(err => {
-                    console.error('Error checking inventory:', err);
-                    process.exit(1);
-                  });
+                  .then(result => { console.log(JSON.stringify({ lowStockItems: result.rows })); process.exit(0); })
+                  .catch(err => { console.error('Error:', err.message); process.exit(1); });
               "
             env:
             - name: DB_USER
@@ -169,6 +195,11 @@ spec:
               limits:
                 memory: "128Mi"
                 cpu: "100m"
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
           restartPolicy: OnFailure
 ---
 apiVersion: policy/v1

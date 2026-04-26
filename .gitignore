@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Build output
+dist/
+build/
+.next/
+
+# Environment files — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Kubernetes secrets — use secrets.yaml.example as the template
+kubernetes/manifests/secrets.yaml
+
+# Test output
+coverage/
+*.lcov
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.dockerignore
+
+# kubeconfig written by CI
+kubeconfig

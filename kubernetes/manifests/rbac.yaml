@@ -1,0 +1,81 @@
+---
+# Dedicated service accounts per workload with automount disabled.
+# Pods should not inherit the default SA's permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backend-sa
+  namespace: ecommerce
+automountServiceAccountToken: false
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: frontend-sa
+  namespace: ecommerce
+automountServiceAccountToken: false
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker-sa
+  namespace: ecommerce
+automountServiceAccountToken: false
+
+---
+# Backend needs read access to its own ConfigMap for runtime config.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backend-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["app-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backend-rolebinding
+  namespace: ecommerce
+subjects:
+- kind: ServiceAccount
+  name: backend-sa
+  namespace: ecommerce
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: backend-role
+
+---
+# Worker needs the same ConfigMap access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["app-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-rolebinding
+  namespace: ecommerce
+subjects:
+- kind: ServiceAccount
+  name: worker-sa
+  namespace: ecommerce
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: worker-role

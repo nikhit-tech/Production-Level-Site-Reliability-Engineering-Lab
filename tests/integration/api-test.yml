@@ -1,0 +1,65 @@
+config:
+  target: "http://localhost:8080"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      name: "Warm up"
+    - duration: 60
+      arrivalRate: 20
+      name: "Integration load"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+  ensure:
+    p99: 2000      # P99 must be under 2 seconds
+    maxErrorRate: 5 # Error rate must be under 5%
+
+scenarios:
+  - name: "Health check"
+    weight: 30
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+            - hasProperty: "status"
+
+  - name: "List products"
+    weight: 40
+    flow:
+      - get:
+          url: "/api/products"
+          expect:
+            - statusCode: 200
+            - hasProperty: "products"
+            - hasProperty: "pagination"
+
+  - name: "Search products"
+    weight: 20
+    flow:
+      - get:
+          url: "/api/products/search/test"
+          expect:
+            - statusCode: 200
+
+  - name: "Register and login user"
+    weight: 10
+    flow:
+      - post:
+          url: "/api/auth/register"
+          json:
+            email: "testuser_{{ $timestamp }}@example.com"
+            password: "TestPassword123!"
+            first_name: "Test"
+            last_name: "User"
+          capture:
+            - json: "$.token"
+              as: "authToken"
+          expect:
+            - statusCode: 201
+      - get:
+          url: "/api/users/profile"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200

@@ -1,29 +1,83 @@
 groups:
-  - name: ecommerce_alerts
+  - name: ecommerce_slo
     rules:
-      # High error rate alerts
+      # ── Multi-window multi-burn-rate SLO alerts (Google SRE Book, Ch. 5) ──
+      # 30-day SLO: 99.9% success rate → error budget = 0.1% = 43.2 min/month
+      #
+      # Fast burn: 14.4× rate → consumes 2% of monthly budget in 1 hour
+      - alert: SLOErrorBudgetBurnFast
+        expr: |
+          (
+            rate(http_requests_total{status_code=~"5.."}[1h]) /
+            rate(http_requests_total[1h])
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          service: backend
+          slo: availability
+        annotations:
+          summary: "SLO error budget burning fast (1h window)"
+          description: "Error rate {{ $value | humanizePercentage }} is burning the monthly error budget at 14.4×. Immediate action required."
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/slo-burn.md"
+
+      # Slow burn: 6× rate → consumes 5% of monthly budget in 6 hours
+      - alert: SLOErrorBudgetBurnSlow
+        expr: |
+          (
+            rate(http_requests_total{status_code=~"5.."}[6h]) /
+            rate(http_requests_total[6h])
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          service: backend
+          slo: availability
+        annotations:
+          summary: "SLO error budget burning slowly (6h window)"
+          description: "Error rate {{ $value | humanizePercentage }} is burning the monthly error budget at 6×. Investigate within the hour."
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/slo-burn.md"
+
+  - name: ecommerce_application
+    rules:
       - alert: HighErrorRate
-        expr: rate(http_requests_total{status_code=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        expr: |
+          rate(http_requests_total{status_code=~"5.."}[5m]) /
+          rate(http_requests_total[5m]) > 0.05
         for: 5m
         labels:
           severity: critical
           service: backend
         annotations:
           summary: "High error rate detected"
-          description: "Error rate is {{ $value | humanizePercentage }} for {{ $labels.instance }}"
+          description: "Error rate is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/high-error-rate.md"
 
-      - alert: HighLatency
-        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
         for: 3m
         labels:
           severity: warning
           service: backend
         annotations:
-          summary: "High latency detected"
-          description: "95th percentile latency is {{ $value }}s for {{ $labels.instance }}"
+          summary: "P95 latency is high"
+          description: "95th percentile latency is {{ $value | humanizeDuration }} on {{ $labels.instance }}"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/high-latency.md"
 
-      # Service availability alerts
-      - alert: ServiceDown
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 1
+        for: 3m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "P99 latency is high"
+          description: "99th percentile latency is {{ $value | humanizeDuration }}"
+
+      # Renamed from ServiceDown to avoid duplicate alert names
+      - alert: BackendServiceDown
         expr: up{job="backend-service"} == 0
         for: 1m
         labels:
@@ -31,9 +85,10 @@ groups:
           service: backend
         annotations:
           summary: "Backend service is down"
-          description: "Backend service {{ $labels.instance }} has been down for more than 1 minute"
+          description: "Backend service {{ $labels.instance }} has been unreachable for more than 1 minute"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/service-down.md"
 
-      - alert: ServiceDown
+      - alert: WorkerServiceDown
         expr: up{job="worker-service"} == 0
         for: 1m
         labels:
@@ -41,18 +96,22 @@ groups:
           service: worker
         annotations:
           summary: "Worker service is down"
-          description: "Worker service {{ $labels.instance }} has been down for more than 1 minute"
+          description: "Worker service {{ $labels.instance }} has been unreachable for more than 1 minute"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/service-down.md"
 
-      # Database alerts
-      - alert: DatabaseConnectionFailure
-        expr: health_check_status{service="database"} == 0
+  - name: ecommerce_database
+    rules:
+      # Uses Prometheus 'up' metric on the scrape target rather than a gauge
+      # that only updates when the /health endpoint is polled.
+      - alert: DatabaseScrapeFailing
+        expr: up{job="backend-service"} == 0
         for: 2m
         labels:
           severity: critical
           service: database
         annotations:
-          summary: "Database connection failure"
-          description: "Database connection has been failing for 2 minutes"
+          summary: "Cannot scrape backend — database health unknown"
+          description: "Backend has been down for 2m; database connectivity cannot be confirmed"
 
       - alert: DatabaseHighConnections
         expr: active_connections > 80
@@ -61,77 +120,33 @@ groups:
           severity: warning
           service: database
         annotations:
-          summary: "High database connections"
-          description: "Database has {{ $value }} active connections"
+          summary: "High number of database connections"
+          description: "{{ $value }} active connections detected — approaching pool limit"
 
-      # Redis alerts
-      - alert: RedisConnectionFailure
-        expr: health_check_status{service="redis"} == 0
+      - alert: DatabaseResponseSlow
+        expr: histogram_quantile(0.95, rate(database_response_time_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "Database queries are slow"
+          description: "P95 database response time is {{ $value | humanizeDuration }}"
+
+  - name: ecommerce_redis
+    rules:
+      - alert: RedisScrapeFailing
+        expr: up{job="backend-service"} == 0
         for: 2m
         labels:
           severity: critical
           service: redis
         annotations:
-          summary: "Redis connection failure"
-          description: "Redis connection has been failing for 2 minutes"
+          summary: "Cannot scrape backend — Redis health unknown"
+          description: "Backend scrape failing; Redis connectivity cannot be confirmed"
 
-      # Resource alerts
-      - alert: HighCPUUsage
-        expr: rate(container_cpu_usage_seconds_total{container!=""}[5m]) * 100 > 90
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High CPU usage"
-          description: "CPU usage is {{ $value }}% for {{ $labels.pod }}"
-
-      - alert: HighMemoryUsage
-        expr: container_memory_usage_bytes / container_spec_memory_limit_bytes * 100 > 85
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory usage"
-          description: "Memory usage is {{ $value }}% for {{ $labels.pod }}"
-
-      - alert: DiskSpaceLow
-        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 15
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Low disk space"
-          description: "Disk space is {{ $value }}% full on {{ $labels.instance }}"
-
-      # Kubernetes alerts
-      - alert: PodCrashLooping
-        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Pod is crash looping"
-          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is crash looping"
-
-      - alert: PodNotReady
-        expr: kube_pod_status_ready{condition="true"} == 0
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Pod is not ready"
-          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for 10 minutes"
-
-      - alert: ReplicaSetMismatch
-        expr: kube_replicaset_spec_replicas != kube_replicaset_status_replicas_available
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "ReplicaSet mismatch"
-          description: "ReplicaSet {{ $labels.replicaset }} has mismatched replica counts"
-
-      # Queue alerts
+  - name: ecommerce_queues
+    rules:
       - alert: HighQueueBacklog
         expr: queue_active_jobs > 50
         for: 5m
@@ -142,40 +157,78 @@ groups:
           summary: "High queue backlog"
           description: "Queue {{ $labels.queue }} has {{ $value }} active jobs"
 
-      - alert: QueueJobFailure
+      - alert: QueueJobFailureRate
         expr: increase(queue_jobs_total{status="failed"}[5m]) > 10
         for: 2m
         labels:
           severity: warning
           service: worker
         annotations:
-          summary: "High job failure rate"
-          description: "Queue {{ $labels.queue }} has {{ $value }} failed jobs in 5 minutes"
+          summary: "High job failure rate in queue"
+          description: "Queue {{ $labels.queue }} had {{ $value }} failures in the last 5 minutes"
 
-      # SLA/SLO alerts
-      - alert: SLOErrorBudgetBurn
-        expr: (1 - rate(http_requests_total{status_code!~"5.."}[5m]) / rate(http_requests_total[5m])) < 0.99
+  - name: ecommerce_kubernetes
+    rules:
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod is crash looping"
+          description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is restarting frequently"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/pod-crash-loop.md"
+
+      - alert: PodNotReady
+        expr: kube_pod_status_ready{condition="true"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod not ready"
+          description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} has been not ready for 10 minutes"
+
+      - alert: ReplicaSetMismatch
+        expr: kube_replicaset_spec_replicas != kube_replicaset_status_replicas_available
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ReplicaSet replica count mismatch"
+          description: "ReplicaSet {{ $labels.replicaset }} desired ≠ available"
+
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{container!=""}[5m]) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High container CPU usage"
+          description: "CPU usage is {{ $value | humanize }}% for {{ $labels.pod }}"
+
+      - alert: HighMemoryUsage
+        expr: |
+          container_memory_usage_bytes{container!=""} /
+          container_spec_memory_limit_bytes{container!=""} * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High container memory usage"
+          description: "Memory usage is {{ $value | humanize }}% for {{ $labels.pod }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 15
         for: 5m
         labels:
           severity: critical
-          service: backend
         annotations:
-          summary: "SLO error budget burning"
-          description: "SLO is at risk: success rate is {{ $value | humanizePercentage }}"
-
-      - alert: SlowResponseTime
-        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 1
-        for: 3m
-        labels:
-          severity: warning
-          service: backend
-        annotations:
-          summary: "Slow response time"
-          description: "99th percentile response time is {{ $value }}s"
+          summary: "Node disk space low"
+          description: "Only {{ $value | humanize }}% disk remaining on {{ $labels.instance }}"
+          runbook_url: "https://github.com/org/repo/blob/main/docs/runbooks/disk-full.md"
 
   - name: infrastructure_alerts
     rules:
-      # Node alerts
       - alert: NodeDown
         expr: up{job="node-exporter"} == 0
         for: 2m
@@ -183,7 +236,7 @@ groups:
           severity: critical
         annotations:
           summary: "Node is down"
-          description: "Node {{ $labels.instance }} is down"
+          description: "Node {{ $labels.instance }} has been unreachable for 2 minutes"
 
       - alert: HighNodeCPU
         expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
@@ -192,7 +245,7 @@ groups:
           severity: warning
         annotations:
           summary: "High node CPU"
-          description: "Node {{ $labels.instance }} CPU usage is {{ $value }}%"
+          description: "Node {{ $labels.instance }} CPU at {{ $value | humanize }}%"
 
       - alert: HighNodeMemory
         expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
@@ -201,14 +254,13 @@ groups:
           severity: warning
         annotations:
           summary: "High node memory"
-          description: "Node {{ $labels.instance }} memory usage is {{ $value }}%"
+          description: "Node {{ $labels.instance }} memory at {{ $value | humanize }}%"
 
-      # Network alerts
       - alert: HighNetworkTraffic
         expr: rate(node_network_receive_bytes_total[5m]) / 1024 / 1024 > 100
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "High network traffic"
-          description: "Network receive rate is {{ $value }}MB/s on {{ $labels.instance }}"
+          summary: "High network ingress"
+          description: "Receive rate is {{ $value | humanize }}MB/s on {{ $labels.instance }}"

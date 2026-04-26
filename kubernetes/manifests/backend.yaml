@@ -12,6 +12,11 @@ spec:
   selector:
     matchLabels:
       app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0      # zero-downtime deploys
   template:
     metadata:
       labels:
@@ -22,11 +27,18 @@ spec:
         prometheus.io/port: "8080"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: backend-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
       containers:
       - name: backend
         image: ecommerce-backend:latest
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
+          name: http
         env:
         - name: NODE_ENV
           valueFrom:
@@ -84,6 +96,8 @@ spec:
             configMapKeyRef:
               name: app-config
               key: LOG_LEVEL
+        - name: METRICS_ALLOWED_IPS
+          value: "127.0.0.1,::1"
         resources:
           requests:
             memory: "256Mi"
@@ -91,27 +105,44 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        # Startup probe gives the app up to 150 s to initialise (30 × 5s)
+        # before liveness kicks in — prevents crash loops on slow DB startup.
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          failureThreshold: 30
+          periodSeconds: 5
         readinessProbe:
           httpGet:
-            path: "/api/health/readiness"
+            path: /api/health/readiness
             port: 8080
-          initialDelaySeconds: 10
+          initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: "/api/health/liveness"
+            path: /api/health/liveness
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 0
           periodSeconds: 10
           timeoutSeconds: 3
           failureThreshold: 3
         volumeMounts:
         - name: logs
           mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
       volumes:
       - name: logs
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
       imagePullSecrets: []
 ---
@@ -157,6 +188,19 @@ spec:
       target:
         type: Utilization
         averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300    # avoid thrashing after traffic spikes
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 4
+        periodSeconds: 30
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

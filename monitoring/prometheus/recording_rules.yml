@@ -1,0 +1,46 @@
+groups:
+  - name: ecommerce_sli_recordings
+    interval: 30s
+    rules:
+      # Pre-compute expensive histogram quantiles so alert expressions stay fast.
+      - record: job:http_request_duration_p50:rate5m
+        expr: histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))
+
+      - record: job:http_request_duration_p95:rate5m
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+      - record: job:http_request_duration_p99:rate5m
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
+
+      # Request rate and error rate — used in SLO burn calculations.
+      - record: job:http_requests_total:rate5m
+        expr: rate(http_requests_total[5m])
+
+      - record: job:http_request_errors:rate5m
+        expr: rate(http_requests_total{status_code=~"5.."}[5m])
+
+      - record: job:http_request_success_ratio:rate5m
+        expr: |
+          1 - (
+            rate(http_requests_total{status_code=~"5.."}[5m]) /
+            rate(http_requests_total[5m])
+          )
+
+      # 30-day rolling availability — what the SLO dashboard should display.
+      - record: job:http_request_success_ratio:rate30d
+        expr: |
+          1 - (
+            rate(http_requests_total{status_code=~"5.."}[30d]) /
+            rate(http_requests_total[30d])
+          )
+
+  - name: ecommerce_queue_recordings
+    interval: 60s
+    rules:
+      - record: job:queue_job_success_ratio:rate5m
+        expr: |
+          rate(queue_jobs_total{status="completed"}[5m]) /
+          (rate(queue_jobs_total{status="completed"}[5m]) + rate(queue_jobs_total{status="failed"}[5m]))
+
+      - record: job:queue_job_duration_p95:rate5m
+        expr: histogram_quantile(0.95, rate(queue_job_duration_seconds_bucket[5m]))

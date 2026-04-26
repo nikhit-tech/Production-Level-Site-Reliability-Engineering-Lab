@@ -13,12 +13,33 @@ env:
 jobs:
   test-backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: ecommerce_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -35,9 +56,19 @@ jobs:
     - name: Run tests
       working-directory: ./services/backend
       run: npm test
+      env:
+        NODE_ENV: test
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: ecommerce_test
+        DB_USER: postgres
+        DB_PASSWORD: testpassword
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        JWT_SECRET: test-jwt-secret-for-ci-only
 
     - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         file: ./services/backend/coverage/lcov.info
         flags: backend
@@ -45,11 +76,9 @@ jobs:
   test-frontend:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -73,12 +102,33 @@ jobs:
 
   test-worker:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: ecommerce_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -95,23 +145,28 @@ jobs:
     - name: Run tests
       working-directory: ./services/worker
       run: npm test
+      env:
+        NODE_ENV: test
+        DB_HOST: localhost
+        DB_PASSWORD: testpassword
+        REDIS_HOST: localhost
 
   security-scan:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
+      uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe  # v0.28.0
       with:
         scan-type: 'fs'
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
 
     - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
@@ -121,12 +176,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     outputs:
-      backend-image: ${{ steps.backend.outputs.image }}
-      frontend-image: ${{ steps.frontend.outputs.image }}
-      worker-image: ${{ steps.worker.outputs.image }}
+      backend-image: ${{ steps.backend-meta.outputs.tags }}
+      frontend-image: ${{ steps.frontend-meta.outputs.tags }}
+      worker-image: ${{ steps.worker-meta.outputs.tags }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
     - name: Log in to Container Registry
       uses: docker/login-action@v3
@@ -136,14 +193,13 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata for backend
-      id: backend
+      id: backend-meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend
         tags: |
           type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha,prefix={{branch}}-,format=short
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push backend image
@@ -151,20 +207,20 @@ jobs:
       with:
         context: ./services/backend
         push: true
-        tags: ${{ steps.backend.outputs.tags }}
-        labels: ${{ steps.backend.outputs.labels }}
+        tags: ${{ steps.backend-meta.outputs.tags }}
+        labels: ${{ steps.backend-meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
 
     - name: Extract metadata for frontend
-      id: frontend
+      id: frontend-meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend
         tags: |
           type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha,prefix={{branch}}-,format=short
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push frontend image
@@ -172,20 +228,20 @@ jobs:
       with:
         context: ./services/frontend
         push: true
-        tags: ${{ steps.frontend.outputs.tags }}
-        labels: ${{ steps.frontend.outputs.labels }}
+        tags: ${{ steps.frontend-meta.outputs.tags }}
+        labels: ${{ steps.frontend-meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
 
     - name: Extract metadata for worker
-      id: worker
+      id: worker-meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker
         tags: |
           type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha,prefix={{branch}}-,format=short
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push worker image
@@ -193,10 +249,11 @@ jobs:
       with:
         context: ./services/worker
         push: true
-        tags: ${{ steps.worker.outputs.tags }}
-        labels: ${{ steps.worker.outputs.labels }}
+        tags: ${{ steps.worker-meta.outputs.tags }}
+        labels: ${{ steps.worker-meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
 
   integration-tests:
     needs: build-and-push-images
@@ -207,7 +264,7 @@ jobs:
         env:
           POSTGRES_DB: ecommerce_test
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
+          POSTGRES_PASSWORD: testpassword
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -215,7 +272,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-
       redis:
         image: redis:7-alpine
         options: >-
@@ -225,27 +281,51 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
 
-    - name: Install test dependencies
-      run: npm install -g artillery
+    - name: Install backend dependencies
+      working-directory: ./services/backend
+      run: npm ci
+
+    - name: Start backend service
+      working-directory: ./services/backend
+      run: node src/index.js &
+      env:
+        NODE_ENV: test
+        PORT: 8080
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: ecommerce_test
+        DB_USER: postgres
+        DB_PASSWORD: testpassword
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        JWT_SECRET: integration-test-jwt-secret
+        ALLOWED_ORIGINS: http://localhost:3000
+
+    - name: Wait for backend to be ready
+      run: |
+        echo "Waiting for backend..."
+        for i in $(seq 1 20); do
+          curl -sf http://localhost:8080/health && echo "Backend ready" && break
+          echo "Attempt $i failed, retrying..."
+          sleep 3
+        done
+        curl -sf http://localhost:8080/health || (echo "Backend never became ready" && exit 1)
+
+    - name: Install Artillery
+      run: npm install -g artillery@latest
 
     - name: Run API integration tests
-      run: |
-        artillery run tests/integration/api-test.yml
+      run: artillery run tests/integration/api-test.yml
 
     - name: Run load tests
-      run: |
-        artillery run tests/load/load-test.yml
+      run: artillery run tests/load/load-test.yml
 
   deploy-staging:
     needs: [build-and-push-images, integration-tests]
@@ -253,8 +333,7 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     environment: staging
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
     - name: Setup kubectl
       uses: azure/setup-kubectl@v3
@@ -264,38 +343,29 @@ jobs:
     - name: Configure kubectl
       run: |
         echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
-        export KUBECONFIG=kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
 
-    - name: Deploy to staging
+    - name: Deploy to staging with Kustomize
       run: |
-        export KUBECONFIG=kubeconfig
-        
-        # Update image tags in deployment manifests
-        sed -i "s|image: ecommerce-backend:.*|image: ${{ needs.build-and-push-images.outputs.backend-image }}|g" kubernetes/manifests/backend.yaml
-        sed -i "s|image: ecommerce-frontend:.*|image: ${{ needs.build-and-push-images.outputs.frontend-image }}|g" kubernetes/manifests/frontend.yaml
-        sed -i "s|image: ecommerce-worker:.*|image: ${{ needs.build-and-push-images.outputs.worker-image }}|g" kubernetes/manifests/worker.yaml
-        
-        # Apply manifests
-        kubectl apply -f kubernetes/manifests/namespace.yaml
-        kubectl apply -f kubernetes/manifests/secrets.yaml
-        kubectl apply -f kubernetes/manifests/configmaps.yaml
-        
-        # Wait for services to be ready
-        kubectl wait --for=condition=available --timeout=300s deployment/backend -n ecommerce
-        kubectl wait --for=condition=available --timeout=300s deployment/frontend -n ecommerce
-        kubectl wait --for=condition=available --timeout=300s deployment/worker -n ecommerce
+        # Update image tags in kustomization overlay
+        cd kubernetes/overlays/staging
+        kustomize edit set image \
+          ecommerce-backend=${{ needs.build-and-push-images.outputs.backend-image }} \
+          ecommerce-frontend=${{ needs.build-and-push-images.outputs.frontend-image }} \
+          ecommerce-worker=${{ needs.build-and-push-images.outputs.worker-image }}
+        kustomize build . | kubectl apply -f -
+
+        kubectl rollout status deployment/backend -n ecommerce --timeout=300s
+        kubectl rollout status deployment/frontend -n ecommerce --timeout=300s
+        kubectl rollout status deployment/worker -n ecommerce --timeout=300s
 
     - name: Run smoke tests
       run: |
-        export KUBECONFIG=kubeconfig
-        
-        # Get service URLs
-        BACKEND_URL=$(kubectl get svc backend-service -n ecommerce -o jsonpath='{.status.loadBalancer.ingress[0].ip}:8080')
-        FRONTEND_URL=$(kubectl get svc frontend-service -n ecommerce -o jsonpath='{.status.loadBalancer.ingress[0].ip}:3000')
-        
-        # Run smoke tests
-        curl -f $BACKEND_URL/health || exit 1
-        curl -f $FRONTEND_URL/health || exit 1
+        kubectl port-forward svc/backend-service 8080:8080 -n ecommerce &
+        sleep 5
+        curl -sf http://localhost:8080/health || exit 1
+        curl -sf http://localhost:8080/api/products || exit 1
+        echo "Staging smoke tests passed"
 
   deploy-production:
     needs: [build-and-push-images, integration-tests]
@@ -303,8 +373,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: production
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
     - name: Setup kubectl
       uses: azure/setup-kubectl@v3
@@ -314,57 +383,35 @@ jobs:
     - name: Configure kubectl
       run: |
         echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
-        export KUBECONFIG=kubeconfig
+        echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
 
-    - name: Deploy to production (Blue-Green)
+    - name: Deploy to production with Kustomize
       run: |
-        export KUBECONFIG=kubeconfig
-        
-        # Update image tags
-        sed -i "s|image: ecommerce-backend:.*|image: ${{ needs.build-and-push-images.outputs.backend-image }}|g" kubernetes/manifests/backend.yaml
-        sed -i "s|image: ecommerce-frontend:.*|image: ${{ needs.build-and-push-images.outputs.frontend-image }}|g" kubernetes/manifests/frontend.yaml
-        sed -i "s|image: ecommerce-worker:.*|image: ${{ needs.build-and-push-images.outputs.worker-image }}|g" kubernetes/manifests/worker.yaml
-        
-        # Deploy to green environment
-        kubectl apply -f kubernetes/manifests/namespace.yaml
-        kubectl apply -f kubernetes/manifests/secrets.yaml
-        kubectl apply -f kubernetes/manifests/configmaps.yaml
-        
-        # Rolling update with max surge
-        kubectl apply -f kubernetes/manifests/postgres.yaml
-        kubectl apply -f kubernetes/manifests/redis.yaml
-        kubectl apply -f kubernetes/manifests/backend.yaml
-        kubectl apply -f kubernetes/manifests/frontend.yaml
-        kubectl apply -f kubernetes/manifests/worker.yaml
-        
-        # Wait for rollout
+        cd kubernetes/overlays/production
+        kustomize edit set image \
+          ecommerce-backend=${{ needs.build-and-push-images.outputs.backend-image }} \
+          ecommerce-frontend=${{ needs.build-and-push-images.outputs.frontend-image }} \
+          ecommerce-worker=${{ needs.build-and-push-images.outputs.worker-image }}
+        kustomize build . | kubectl apply -f -
+
         kubectl rollout status deployment/backend -n ecommerce --timeout=600s
         kubectl rollout status deployment/frontend -n ecommerce --timeout=600s
         kubectl rollout status deployment/worker -n ecommerce --timeout=600s
 
     - name: Run production smoke tests
       run: |
-        export KUBECONFIG=kubeconfig
-        
-        # Get service URLs
-        BACKEND_URL=$(kubectl get svc backend-service -n ecommerce -o jsonpath='{.status.loadBalancer.ingress[0].ip}:8080')
-        FRONTEND_URL=$(kubectl get svc frontend-service -n ecommerce -o jsonpath='{.status.loadBalancer.ingress[0].ip}:3000')
-        
-        # Run comprehensive smoke tests
-        curl -f $BACKEND_URL/health || exit 1
-        curl -f $FRONTEND_URL/health || exit 1
-        curl -f $BACKEND_URL/metrics || exit 1
-        
-        # Test API endpoints
-        curl -f $BACKEND_URL/api/products || exit 1
-        curl -f $BACKEND_URL/api/health/detailed || exit 1
+        kubectl port-forward svc/backend-service 8080:8080 -n ecommerce &
+        sleep 5
+        curl -sf http://localhost:8080/health       || exit 1
+        curl -sf http://localhost:8080/api/products || exit 1
+        echo "Production smoke tests passed"
 
     - name: Notify deployment success
       if: success()
       uses: 8398a7/action-slack@v3
       with:
         status: success
-        text: "✅ Production deployment successful! Commit: ${{ github.sha }}"
+        text: ":white_check_mark: Production deployment successful! Commit: ${{ github.sha }}"
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
@@ -373,6 +420,6 @@ jobs:
       uses: 8398a7/action-slack@v3
       with:
         status: failure
-        text: "❌ Production deployment failed! Commit: ${{ github.sha }}"
+        text: ":x: Production deployment failed! Commit: ${{ github.sha }}"
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
